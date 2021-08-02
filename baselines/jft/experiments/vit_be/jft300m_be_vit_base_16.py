@@ -46,16 +46,16 @@ def get_config():
   # Model parameters.
   config.model_name = 'PatchTransformerBE'
   config.model = ml_collections.ConfigDict()
-  config.model.patch_size = (32, 32)
-  config.model.hidden_size = 512
-  config.model.representation_size = 512
+  config.model.patch_size = (16, 16)
+  config.model.hidden_size = 768
+  config.model.representation_size = 768
   config.model.classifier = 'token'
   config.model.transformer = ml_collections.ConfigDict()
-  config.model.transformer.num_layers = 8
+  config.model.transformer.num_layers = 12
   config.model.transformer.dropout_rate = 0.0
-  config.model.transformer.mlp_dim = 2048
-  config.model.transformer.num_heads = 8
-  config.model.transformer.attention_dropout_rate = 1.0
+  config.model.transformer.mlp_dim = 3072
+  config.model.transformer.num_heads = 12
+  config.model.transformer.attention_dropout_rate = 0.0
 
   # BatchEnsemblee parameters.
   config.model.transformer.be_layers = (1, 3, 5, 7)
@@ -107,11 +107,12 @@ def get_sweep(hyper):
   return hyper.product([
       # Use this as a sensible sweep over other hyperparameters.
       # hyper.sweep('config.seed', list(range(3))),
-      # hyper.sweep('config.model.transformer.ens_size', [2, 4, 8, 16]),
-      # hyper.sweep('config.num_epochs', [5, 8, 10]),
-      # hyper.sweep('config.model.transformer.be_layers',
-      #             [(1, 3, 5, 7), (0, 1, 2, 3, 4, 5, 6, 7)]),
-      # hyper.sweep('config.model.transformer.random_sign_init',
-      #             [-1.0, -0.75, -0.5, 0.0, 0.5, 0.75, 1.0]),
+      hyper.sweep('config.model.transformer.ens_size', [4, 8, 16]),
+      hyper.sweep('config.num_epochs', [5, 8, 10]),
+      hyper.sweep('config.model.transformer.be_layers',
+                  [(1, 3, 5, 7)]),  # , (0, 1, 2, 3, 4, 5, 6, 7)]),
+      hyper.sweep('config.model.transformer.random_sign_init',
+                  [-1.0, -0.75, -0.5, 0.5, 0.75]),
       hyper.sweep('config.fast_weight_lr_multiplier', [0.2, 0.5, 1.0, 2.0]),
+      hyper.sweep('config.lr.base', [1e-4, 1e-3, 1e-2]),
   ])
