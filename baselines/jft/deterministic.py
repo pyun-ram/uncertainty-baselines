@@ -36,6 +36,8 @@ import robustness_metrics as rm
 import tensorflow as tf
 from tensorflow.io import gfile
 import uncertainty_baselines as ub
+import ood_utils  # local file import
+from t5.evaluation import metrics as t5_metrics
 
 fewshot = None
 input_pipeline = None
@@ -181,8 +183,15 @@ def main(argv):
       }
     else:
       raise NotImplementedError(
-          'Only string type of val_split is supported! Got val_split=%s!' %
+          'Only string type of ood_split is supported! Got ood_split=%s!' %
           str(config.ood_split))
+    if isinstance(config.train_split, str):
+      train_maha_ds = _get_val_split(config.dataset, config.train_split,
+                                     config.pp_eval, config.get('data_dir'))
+    else:
+      raise NotImplementedError(
+          'Only string type of train_split is supported! Got train_split=%s!' %
+          str(config.train_split))
 
   ntrain_img = input_pipeline.get_num_examples(
       config.dataset, config.train_split,
@@ -233,9 +242,9 @@ def main(argv):
   def evaluation_fn(params, images, labels, mask):
     # Ignore the entries with all zero labels for evaluation.
     mask *= labels.max(axis=1)
-    logits, _ = model.apply({'params': flax.core.freeze(params)},
-                            images,
-                            train=False)
+    logits, out = model.apply({'params': flax.core.freeze(params)},
+                              images,
+                              train=False)
 
     losses = getattr(u, config.get('loss', 'sigmoid_xent'))(
         logits=logits, labels=labels, reduction=False)
@@ -247,7 +256,8 @@ def main(argv):
     ncorrect = jax.lax.psum(top1_correct * mask, axis_name='batch')
     n = jax.lax.psum(mask, axis_name='batch')
 
-    metric_args = jax.lax.all_gather([logits, labels, mask], axis_name='batch')
+    metric_args = jax.lax.all_gather([logits, labels, out['pre_logits'], mask],
+                                     axis_name='batch')
     return ncorrect, loss, n, metric_args
 
   # Setup function for computing representation.
@@ -468,7 +478,7 @@ def main(argv):
           nseen += np.sum(np.array(batch_n[0]))
           # Here we parse batch_metric_args to compute complicated metrics
           # such as ECE.
-          logits, labels, masks = batch_metric_args
+          logits, labels, _, masks = batch_metric_args
           masks = np.array(masks[0], dtype=np.bool)
           # From one-hot to integer labels, as required by ECE.
           labels = np.argmax(np.array(labels[0]), axis=-1)
@@ -485,43 +495,90 @@ def main(argv):
       # OOD eval
       if ood_ds:
         ood_metrics = {
-            'auroc':
+            'msp_auroc':
                 tf.keras.metrics.AUC(
                     curve='ROC', summation_method='interpolation'),
-            'auprc':
+            'msp_auprc':
                 tf.keras.metrics.AUC(
-                    curve='PR', summation_method='interpolation')
+                    curve='PR', summation_method='interpolation'),
         }
         for metric in ood_metrics.values():
           metric.reset_states()
+        # keras.metrics only allows predictions in the range of [0, 1]
+        # so we have to set up metric for Mahalanobis distance separately
+        maha_metric = {'score': [], 'label': []}
+
+        # For Mahalanobis distance, we need to first fit class conditional
+        # Gaussian using training data
+        pre_logits_list, labels_list = [], []
+        val_iter, val_steps = train_maha_ds
+        for _, batch in zip(range(val_steps), val_iter):
+          batch_ncorrect, batch_losses, batch_n, batch_metric_args = evaluation_fn(
+              opt_repl.target, batch['image'], batch['labels'], batch['mask'])
+          # Here we parse batch_metric_args to compute
+          # complicated metrics such as ECE and OOD AUROC
+          logits, labels, pre_logits, masks = batch_metric_args
+          masks_bool = np.array(masks[0], dtype=bool)
+          pre_logits_list.append(np.array(pre_logits[0])[masks_bool])
+          # labels = np.argmax(np.array(labels[0]), axis=-1)
+          labels_list.append(np.array(labels[0])[masks_bool])
+        pre_logits_train = np.vstack(np.vstack(pre_logits_list))
+        labels_train = np.argmax(np.vstack(np.vstack(labels_list)), axis=-1)
+        mean_list, cov = ood_utils.compute_mean_and_cov(pre_logits_train,
+                                                        labels_train)
+
         for val_name, (val_iter, val_steps) in ood_ds.items():
           for _, batch in zip(range(val_steps), val_iter):
             batch_ncorrect, batch_losses, batch_n, batch_metric_args = evaluation_fn(
                 opt_repl.target, batch['image'], batch['labels'], batch['mask'])
-            # All results are a replicated array shaped as follows:
-            # (local_devices, per_device_batch_size, elem_shape...)
-            # with each local device's entry being identical as they got psum'd.
-            # So let's just take the first one to the host as numpy.
             ncorrect += np.sum(np.array(batch_ncorrect[0]))
             loss += np.sum(np.array(batch_losses[0]))
             nseen += np.sum(np.array(batch_n[0]))
 
             # Here we parse batch_metric_args to compute
             # complicated metrics such as ECE and OOD AUROC
-            logits, _, masks = batch_metric_args
+            logits, labels, pre_logits, masks = batch_metric_args
+            masks_bool = np.array(masks[0], dtype=bool)
+            # Maha
+            dists = ood_utils.compute_maha_dist(
+                np.array(pre_logits[0])[masks_bool], mean_list, cov)
+            # MSP
             probs = jax.nn.softmax(logits[0], axis=-1)
-            probs = probs[jnp.array(masks[0], dtype=bool)]
-            confs = jnp.max(probs, axis=-1)
-            ood_labels = np.ones_like(
-                confs) if val_name == 'ind' else np.zeros_like(confs)
-            for metric in ood_metrics.values():
-              metric.update_state(ood_labels, confs)
+            probs = probs[masks_bool]
+
+            # Update metric state for each metric in ood_metrics
+            for metric_name, metric in ood_metrics.items():
+              if 'msp' in metric_name:
+                ood_scores = np.max(probs, axis=-1)
+                ood_labels = np.ones_like(
+                    ood_scores) if val_name == 'ind' else np.zeros_like(
+                        ood_scores)
+                metric.update_state(ood_labels, ood_scores)
+              else:
+                raise NotImplementedError(
+                    'Only msp and maha are supported! Got metric_name=%s!' %
+                    metric_name)
+            # Update maha metric state
+            ood_scores = np.min(dists, axis=-1)
+            ood_labels = np.zeros_like(
+                ood_scores) if val_name == 'ind' else np.ones_like(ood_scores)
+            maha_metric['score'] += list(ood_scores)
+            maha_metric['label'] += list(ood_labels)
+
           if val_name == 'ind':
             val_loss = loss / nseen  # Keep to return for reproducibility tests.
             mw.measure(f'{val_name}_prec@1', ncorrect / nseen)
             mw.measure(f'{val_name}_loss', val_loss)
-        for name, value in ood_metrics.items():
-          mw.measure(f'ood_{name}', value.result())
+        for metric_name, metric in ood_metrics.items():
+          if 'msp' in metric_name:
+            mw.measure(f'ood_{metric_name}', metric.result())
+          else:
+            raise NotImplementedError(
+                'Only msp and maha are supported! Got metric_name=%s!' %
+                metric_name)
+        maha_aucs = t5_metrics.auc(maha_metric['label'], maha_metric['score'])
+        mw.measure('ood_maha_auroc', maha_aucs['auc-roc'])
+        mw.measure('ood_maha_auprc', maha_aucs['auc-pr'])
       chrono.resume()
 
     if 'fewshot' in config:
