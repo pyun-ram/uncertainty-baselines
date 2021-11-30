@@ -44,6 +44,11 @@ flags.DEFINE_string('data_dir', None,
 flags.DEFINE_bool('download_data', False,
                   'Whether to download data locally when initializing a '
                   'dataset.')
+flags.DEFINE_bool(
+    'drop_remainder_for_eval', False,
+    'Whether to drop the last batch in the case it has fewer than batch_size '
+    'elements. If your use TPU and XLA which requires data to have a '
+    'statically known shape, you should use drop_remainder=True.')
 flags.DEFINE_float('l2', 2e-4, 'L2 regularization coefficient.')
 flags.DEFINE_float('lr_decay_ratio', 0.2, 'Amount to decay learning rate.')
 flags.DEFINE_list('lr_decay_epochs', ['60', '120', '160'],
@@ -58,6 +63,8 @@ flags.DEFINE_integer('per_core_batch_size', 64,
                      'Batch size per TPU core/GPU. The number of new '
                      'datapoints gathered per batch is this number divided by '
                      'ensemble_size (we tile the batch by that # of times).')
+flags.DEFINE_integer('shuffle_buffer_size', None,
+                     'Shuffle buffer size for training dataset.')
 flags.DEFINE_integer('seed', 42, 'Random seed.')
 flags.DEFINE_integer('train_epochs', 200, 'Number of training epochs.')
 flags.DEFINE_float('train_proportion', default=1.0,
@@ -79,7 +86,7 @@ def load_cifar100_c(corruption_name,
                     batch_size,
                     use_bfloat16,
                     path,
-                    drop_remainder=True,
+                    drop_remainder=False,
                     normalize=True,
                     standarize=True):
   """Loads CIFAR-100-C dataset."""
@@ -123,7 +130,7 @@ def load_cifar10_c(corruption_name,
                    corruption_intensity,
                    batch_size,
                    use_bfloat16,
-                   drop_remainder=True,
+                   drop_remainder=False,
                    normalize=True):
   """Loads CIFAR-10-C dataset."""
   if use_bfloat16:

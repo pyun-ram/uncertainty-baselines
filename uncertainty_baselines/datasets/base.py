@@ -93,7 +93,7 @@ class BaseDataset(robustness_metrics_base.TFDSDataset):
       is_training: Optional[bool] = None,
       shuffle_buffer_size: Optional[int] = None,
       num_parallel_parser_calls: int = tf.data.experimental.AUTOTUNE,
-      drop_remainder: bool = True,
+      drop_remainder: bool = False,
       fingerprint_key: Optional[str] = None,
       download_data: bool = False,
       decoders: Optional[Dict[str, tfds.decode.Decoder]] = None,
@@ -122,8 +122,7 @@ class BaseDataset(robustness_metrics_base.TFDSDataset):
       num_parallel_parser_calls: the number of parallel threads to use while
         preprocessing in tf.data.Dataset.map().
       drop_remainder: whether or not to drop the last batch of data if the
-        number of points is not exactly equal to the batch size. This option
-        needs to be True for running on TPUs.
+        number of points is not exactly equal to the batch size.
       fingerprint_key: The name of the feature holding a string that will be
         used to create an element id using a fingerprinting function. If None,
         then `ds.enumerate()` is added before the `ds.map(preprocessing_fn)` is
@@ -471,11 +470,16 @@ def make_ood_dataset(ood_dataset_cls: _BaseDatasetClass) -> _BaseDatasetClass:
         combined_dataset = combined_dataset.shuffle(self._shuffle_buffer_size)
       return combined_dataset
 
-    @property
-    def num_examples(self):
-      return (
-          self._in_distribution_dataset.num_examples +
-          super().num_examples)
+    def num_examples(self, data_type='default'):
+      if data_type == 'default':
+        return (self._in_distribution_dataset.num_examples +
+                super().num_examples)
+      elif data_type == 'in_distribution':
+        return self._in_distribution_dataset.num_examples
+      elif data_type == 'ood':
+        return super().num_examples
+      else:
+        raise NotImplementedError('The data_type %s is not valid.' % data_type)
 
   return _OodBaseDataset
 

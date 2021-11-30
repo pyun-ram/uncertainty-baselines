@@ -1,6 +1,6 @@
 # Uncertainty Baselines
 
-[![Travis](https://travis-ci.org/google/uncertainty-baselines.svg?branch=main)](https://travis-ci.org/google/uncertainty-baselines)
+[![Tests](https://github.com/google/uncertainty-baselines/actions/workflows/ci.yml/badge.svg)](https://github.com/google/uncertainty-baselines/actions/workflows/ci.yml)
 
 The goal of Uncertainty Baselines is to provide a template for researchers to
 build on. The baselines can be a starting point for any new ideas, applications,
@@ -30,8 +30,12 @@ To install the latest development version, run
 pip install "git+https://github.com/google/uncertainty-baselines.git#egg=uncertainty_baselines"
 ```
 
-There is not yet a stable version (nor an official release of this library).
-All APIs are subject to change.
+There is not yet a stable version (nor an official release of this library). All
+APIs are subject to change. Installing `uncertainty_baselines` does not
+automatically install any backend. For TensorFlow, you will need to install
+TensorFlow ( `tensorflow` or `tf-nightly`), TensorFlow Addons (`tensorflow-
+addons` or `tfa-nightly`), and TensorBoard (`tensorboard` or `tb-nightly`). See
+the extra dependencies one can install in `setup.py`.
 
 ## Usage
 
@@ -95,6 +99,7 @@ The
 module consists of datasets following the
 [TensorFlow Datasets](https://www.tensorflow.org/datasets) API.
 They add minimal logic such as default data preprocessing.
+Note: in ipython/colab notebook, one may need to activate tf earger execution mode `tf.compat.v1.enable_eager_execution()`.
 
 ```python
 import uncertainty_baselines as ub

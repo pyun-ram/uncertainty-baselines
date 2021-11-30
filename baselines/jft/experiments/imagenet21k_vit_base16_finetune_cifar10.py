@@ -20,7 +20,6 @@ r"""ViT-B/16 finetuning on CIFAR.
 # pylint: enable=line-too-long
 
 import ml_collections
-# TODO(dusenberrymw): Open-source remaining imports.
 
 
 def get_sweep(hyper):
@@ -37,11 +36,6 @@ def get_config():
   config.train_split = 'train[:98%]'
   config.num_classes = 10
 
-  # OOD eval
-  # ood_split is the data split for both the ood_dataset and the dataset.
-  config.ood_dataset = 'cifar100'
-  config.ood_split = 'test'
-
   BATCH_SIZE = 512  # pylint: disable=invalid-name
   config.batch_size = BATCH_SIZE
 
@@ -52,9 +46,29 @@ def get_config():
   # pp_common += f'|onehot({config.num_classes})'
   # To use ancestor 'smearing', use this line instead:
   pp_common += f'|onehot({config.num_classes}, key="label", key_result="labels")'  # pylint: disable=line-too-long
-  pp_common += '|keep("image", "labels")'
+  pp_common += '|keep(["image", "labels"])'
   config.pp_train = f'decode|inception_crop({INPUT_RES})|flip_lr' + pp_common
   config.pp_eval = f'decode|resize({INPUT_RES})' + pp_common
+
+  # OOD eval
+  # ood_split is the data split for both the ood_dataset and the dataset.
+  config.ood_datasets = ['cifar100', 'svhn_cropped']
+  config.ood_num_classes = [100, 10]
+  config.ood_split = 'test'
+  config.ood_methods = ['msp', 'entropy', 'maha', 'rmaha']
+  pp_eval_ood = []
+  for num_classes in config.ood_num_classes:
+    if num_classes > config.num_classes:
+      # Note that evaluation_fn ignores the entries with all zero labels for
+      # evaluation. When num_classes > n_cls, we should use onehot{num_classes},
+      # otherwise the labels that are greater than n_cls will be encoded with
+      # all zeros and then be ignored.
+      pp_eval_ood.append(
+          config.pp_eval.replace(f'onehot({config.num_classes}',
+                                 f'onehot({num_classes}'))
+    else:
+      pp_eval_ood.append(config.pp_eval)
+  config.pp_eval_ood = pp_eval_ood
 
   config.shuffle_buffer_size = 50_000  # Per host, so small-ish is ok.
 
@@ -95,10 +109,9 @@ def get_config():
   config.loss = 'softmax_xent'  # or 'sigmoid_xent'
 
   config.lr = ml_collections.ConfigDict()
-  config.lr.base = 0.001
+  config.lr.base = 0.003
   config.lr.warmup_steps = 500
   config.lr.decay_type = 'cosine'
-  config.lr.scale_with_batchsize = False
 
   config.args = {}
   return config
